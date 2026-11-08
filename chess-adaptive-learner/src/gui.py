@@ -7,8 +7,9 @@ mai chiamate dirette ai widget dal thread di lavoro.
 """
 
 from PySide6.QtCore import QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
+    QActionGroup,
     QGraphicsEllipseItem,
     QGraphicsScene,
     QGraphicsTextItem,
@@ -44,9 +45,19 @@ from .engine import (
 )
 from .learner import FEATURE_NAMES, LearnerEngine
 
-SQ = 64          # dimensione di una casella in pixel
-MARGIN = 28      # bordo per le coordinate
+SQ = 80          # dimensione di una casella in pixel (risoluzione della scena)
+MARGIN = 30      # bordo per le coordinate
 BOARD_PX = SQ * 8
+
+# Font con glifi degli scacchi: fallback cross-platform (Windows non ha DejaVu Sans).
+PIECE_FONT_FAMILIES = ["DejaVu Sans", "Segoe UI Symbol", "Noto Sans Symbols 2", "Arial Unicode MS"]
+
+
+def make_font(pixel_size, families=None):
+    font = QFont()
+    font.setFamilies(families if families else PIECE_FONT_FAMILIES)
+    font.setPixelSize(pixel_size)
+    return font
 
 # Glifi Unicode dei pezzi (bianco vuoto / nero pieno).
 GLYPH_WHITE = {KING: "♔", QUEEN: "♕", ROOK: "♖", BISHOP: "♗", KNIGHT: "♘", PAWN: "♙"}
@@ -81,7 +92,7 @@ class EngineWorker(QThread):
 
 
 class ChessView(QGraphicsView):
-    """Vista con gestione del click sulle caselle."""
+    """Vista ridimensionabile che riempie lo spazio disponibile mantenendo le proporzioni."""
 
     def __init__(self, on_square, parent=None):
         super().__init__(parent)
@@ -89,10 +100,14 @@ class ChessView(QGraphicsView):
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHint(QPainter.Antialiasing, True)
-        self.setFixedSize(BOARD_PX + 2 * MARGIN, BOARD_PX + 2 * MARGIN)
+        self.setMinimumSize(420, 420)
+        self._scene.setSceneRect(0, 0, BOARD_PX + 2 * MARGIN, BOARD_PX + 2 * MARGIN)
 
-    def scene_rect(self):
-        return self._scene.sceneRect()
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        rect = self._scene.sceneRect()
+        if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+            self.fitInView(rect, Qt.KeepAspectRatio)
 
     def mousePressEvent(self, event):
         pos = self.mapToScene(event.position().toPoint())
@@ -120,20 +135,40 @@ class MainWindow(QMainWindow):
         self._ready = False
         self._build_ui()
         self._ready = True
+        self.resize(BOARD_PX + 2 * MARGIN + 430, BOARD_PX + 2 * MARGIN + 80)
         self.new_game()
 
     # ---------- costruzione UI ----------
 
     def _build_ui(self):
+        # Menu bar: scelta del tipo di motore.
+        menu_motore = self.menuBar().addMenu("Motore")
+        self.action_adaptive = QAction("Motore Adattivo", self)
+        self.action_learner = QAction("Motore Imparante", self)
+        for action in (self.action_adaptive, self.action_learner):
+            action.setCheckable(True)
+        self._action_group = QActionGroup(self)
+        self._action_group.setExclusive(True)
+        self._action_group.addAction(self.action_adaptive)
+        self._action_group.addAction(self.action_learner)
+        menu_motore.addAction(self.action_adaptive)
+        menu_motore.addAction(self.action_learner)
+        self.action_adaptive.setChecked(True)
+        self.action_adaptive.triggered.connect(lambda: self.set_mode("adaptive"))
+        self.action_learner.triggered.connect(lambda: self.set_mode("learner"))
+
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
 
         self.view = ChessView(self.on_display_square)
-        root.addWidget(self.view)
+        root.addWidget(self.view, 1)
 
         panel = QVBoxLayout()
-        root.addLayout(panel, 1)
+        panel_box = QWidget()
+        panel_box.setLayout(panel)
+        panel_box.setMaximumWidth(400)
+        root.addWidget(panel_box, 0)
 
         grp_mode = QGroupBox("Modalità")
         lay_mode = QVBoxLayout(grp_mode)
@@ -204,11 +239,9 @@ class MainWindow(QMainWindow):
         self.legal_cache = []
         self.last_move = None
         self._game_over = False
-        if self.radio_adaptive.isChecked():
-            self.mode = "adaptive"
+        if self.mode == "adaptive":
             self.engine = AdaptiveEngine()
         else:
-            self.mode = "learner"
             self.engine = LearnerEngine()
         self.player_color = WHITE if self.radio_white.isChecked() else BLACK
         self.engine.color = BLACK if self.player_color == WHITE else WHITE
@@ -225,6 +258,22 @@ class MainWindow(QMainWindow):
         sender = self.sender()
         if sender is not None and not sender.isChecked():
             return
+        self.set_mode("adaptive" if self.radio_adaptive.isChecked() else "learner")
+
+    def set_mode(self, mode):
+        """Cambia il tipo di motore dal menu bar o dai radio button (sincronizzati)."""
+        if not self._ready:
+            self.mode = mode
+            return
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self.radio_adaptive.blockSignals(True)
+        self.radio_learner.blockSignals(True)
+        self.radio_adaptive.setChecked(mode == "adaptive")
+        self.radio_learner.setChecked(mode == "learner")
+        self.radio_adaptive.blockSignals(False)
+        self.radio_learner.blockSignals(False)
         self.new_game()
 
     def on_display_square(self, col, row):
@@ -387,7 +436,7 @@ class MainWindow(QMainWindow):
             glyph = GLYPH_WHITE[t] if (p & 8) == WHITE else GLYPH_BLACK[t]
             x = MARGIN + col * SQ
             y = MARGIN + row * SQ
-            font = QFont("DejaVu Sans", int(SQ * 0.72))
+            font = make_font(int(SQ * 0.72))
             probe = QGraphicsTextItem(glyph)
             probe.setFont(font)
             w = probe.boundingRect().width()
@@ -406,7 +455,7 @@ class MainWindow(QMainWindow):
             item.setPos(px, py)
             scene.addItem(item)
         # coordinate
-        font = QFont("DejaVu Sans", 10)
+        font = make_font(12, families=["DejaVu Sans", "Segoe UI", "Arial"])
         for c in range(8):
             file_label = chr(ord("a") + (c if self.player_color == WHITE else 7 - c))
             t1 = QGraphicsTextItem(file_label)
