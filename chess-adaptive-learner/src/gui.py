@@ -117,13 +117,16 @@ class MainWindow(QMainWindow):
         self.legal_cache = []
         self.last_move = None      # (from_sq, to_sq)
         self._game_over = False
+        self._ready = False
         self._build_ui()
+        self._ready = True
         self.new_game()
 
     # ---------- costruzione UI ----------
 
     def _build_ui(self):
         central = QWidget()
+        self.setCentralWidget(central)
         root = QHBoxLayout(central)
 
         self.view = ChessView(self.on_display_square)
@@ -217,6 +220,8 @@ class MainWindow(QMainWindow):
             self._start_engine_move()
 
     def on_mode_changed(self):
+        if not self._ready:
+            return
         sender = self.sender()
         if sender is not None and not sender.isChecked():
             return
