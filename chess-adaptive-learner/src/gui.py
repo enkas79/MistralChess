@@ -7,9 +7,8 @@ mai chiamate dirette ai widget dal thread di lavoro.
 """
 
 from PySide6.QtCore import QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QAction, QActionGroup, QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QActionGroup,
     QGraphicsEllipseItem,
     QGraphicsScene,
     QGraphicsTextItem,
