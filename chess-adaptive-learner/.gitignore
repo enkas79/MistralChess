@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+learner_weights.json
+adaptive_state.json
+*.json
+!requirements.txt
+.pytest_cache/
